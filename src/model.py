@@ -7,6 +7,8 @@ import numpy as np
 from tqdm import tqdm
 import os
 import time
+import pickle
+from sklearn.metrics import f1_score
 
 
 class LabelSmoothingCrossEntropy(nn.Module):
@@ -44,38 +46,15 @@ def mixup_criterion(criterion, pred, y_a, y_b, lam):
 
 class WasteClassifier(nn.Module):
     
-    def __init__(self, num_classes=3, backbone='efficientnet_b0', pretrained=True):
+    def __init__(self, num_classes=3, pretrained=True):
         super(WasteClassifier, self).__init__()
         
-        self.backbone_name = backbone
+        self.backbone_name = 'efficientnet_b0'
         self.num_classes = num_classes
-        if backbone == 'efficientnet_b0':
-            self.backbone = models.efficientnet_b0(pretrained=pretrained)
-            num_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
-            
-        elif backbone == 'efficientnet_b3':
-            self.backbone = models.efficientnet_b3(pretrained=pretrained)
-            num_features = self.backbone.classifier[1].in_features
-            self.backbone.classifier = nn.Identity()
-            
-        elif backbone == 'resnet50':
-            self.backbone = models.resnet50(pretrained=pretrained)
-            num_features = self.backbone.fc.in_features
-            self.backbone.fc = nn.Identity()
-            
-        elif backbone == 'resnet101':
-            self.backbone = models.resnet101(pretrained=pretrained)
-            num_features = self.backbone.fc.in_features
-            self.backbone.fc = nn.Identity()
-            
-        elif backbone == 'convnext_tiny':
-            self.backbone = models.convnext_tiny(pretrained=pretrained)
-            num_features = self.backbone.classifier[2].in_features
-            self.backbone.classifier = nn.Identity()
-            
-        else:
-            raise ValueError(f"Unsupported backbone: {backbone}")
+        
+        self.backbone = models.efficientnet_b0(pretrained=pretrained)
+        num_features = self.backbone.classifier[1].in_features
+        self.backbone.classifier = nn.Identity()
         self.classifier = nn.Sequential(
             nn.Dropout(0.4),
             nn.Linear(num_features, 512),
@@ -98,7 +77,7 @@ class Trainer:
     def __init__(self, model, train_loader, val_loader, device, 
                  learning_rate=1e-3, weight_decay=1e-4, 
                  label_smoothing=0.1, use_mixup=True, mixup_alpha=0.2,
-                 warmup_epochs=5, min_lr=1e-6):
+                 warmup_epochs=5, min_lr=1e-6, early_stopping_patience=15):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -133,6 +112,8 @@ class Trainer:
         }
         
         self.best_val_f1 = 0.0
+        self.early_stopping_patience = early_stopping_patience
+        self.patience_counter = 0
         
     def train_epoch(self, epoch):
         self.model.train()
@@ -205,7 +186,6 @@ class Trainer:
         epoch_loss = running_loss / len(self.val_loader)
         epoch_acc = 100. * correct / total
         
-        from sklearn.metrics import f1_score
         val_f1 = f1_score(all_labels, all_preds, average='macro')
         
         return epoch_loss, epoch_acc, val_f1
@@ -241,6 +221,7 @@ class Trainer:
             
             if val_f1 > self.best_val_f1:
                 self.best_val_f1 = val_f1
+                self.patience_counter = 0
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
@@ -251,26 +232,51 @@ class Trainer:
                     'backbone': self.model.backbone_name
                 }, os.path.join(save_dir, 'best_model.pth'))
                 print(f'Best model saved with Val F1: {val_f1:.4f}')
-            
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': self.model.state_dict(),
-                'optimizer_state_dict': self.optimizer.state_dict(),
-                'scheduler_state_dict': self.scheduler.state_dict(),
-                'val_f1': val_f1,
-                'history': self.history
-            }, os.path.join(save_dir, 'last_model.pth'))
+            else:
+                self.patience_counter += 1
+                print(f'No improvement for {self.patience_counter} epochs')
+                
+                if self.patience_counter >= self.early_stopping_patience:
+                    print(f'\nEarly stopping triggered after {epoch} epochs')
+                    print(f'Best Val F1: {self.best_val_f1:.4f}')
+                    
+                    # Load best model
+                    checkpoint = torch.load(os.path.join(save_dir, 'best_model.pth'))
+                    self.model.load_state_dict(checkpoint['model_state_dict'])
+                    
+                    return self.history
         
         print(f'\nTraining completed. Best Val F1: {self.best_val_f1:.4f}')
         return self.history
 
 
+def save_training_history(history, output_dir='output'):
+    """Save training history to file"""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    output_path = os.path.join(output_dir, 'training_history.pkl')
+    with open(output_path, 'wb') as f:
+        pickle.dump(history, f)
+    
+    print(f"Training history saved to {output_path}")
+    return output_path
+
+
+def load_training_history(output_dir='output'):
+    """Load training history from file"""
+    input_path = os.path.join(output_dir, 'training_history.pkl')
+    
+    with open(input_path, 'rb') as f:
+        history = pickle.load(f)
+    
+    print(f"Training history loaded from {input_path}")
+    return history
+
+
 def load_model(checkpoint_path, num_classes=3, device='cuda'):
     checkpoint = torch.load(checkpoint_path, map_location=device)
     
-    backbone = checkpoint.get('backbone', 'efficientnet_b0')
-    
-    model = WasteClassifier(num_classes=num_classes, backbone=backbone, pretrained=False)
+    model = WasteClassifier(num_classes=num_classes, pretrained=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model = model.to(device)
     model.eval()

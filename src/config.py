@@ -11,7 +11,7 @@ class Config:
     
     NUM_CLASSES = 3
     CLASS_NAMES = ['Recyclable', 'Electronic', 'Organic']
-    CLASS_TO_IDX = {'Recyclable': 0, 'Electronic': 1, 'Organic': 2}
+    CLASS_TO_IDX = {'0_Recycleable': 0, '1_Electronic': 1, '2_Organic': 2}
     
     IMAGE_SIZE = 224
     BATCH_SIZE = 64
@@ -22,10 +22,7 @@ class Config:
     VAL_SPLIT = 0.15
     SEED = 42
     
-    BACKBONE = 'convnext_tiny'
     PRETRAINED = True
-    
-    AVAILABLE_BACKBONES = ['efficientnet_b0', 'efficientnet_b3', 'resnet50', 'resnet101', 'convnext_tiny']
     
     MEAN = [0.485, 0.456, 0.406]
     STD = [0.229, 0.224, 0.225]
@@ -38,6 +35,8 @@ class Config:
     
     WARMUP_EPOCHS = 5
     MIN_LR = 1e-6
+    
+    EARLY_STOPPING_PATIENCE = 15
     
     @staticmethod
     def get_project_root():

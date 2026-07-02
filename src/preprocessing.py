@@ -1,8 +1,8 @@
 
 import os
 import torch
+import pickle
 from torch.utils.data import Dataset, DataLoader
-from torchvision import transforms
 from PIL import Image
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -126,9 +126,9 @@ def load_train_data(data_dir):
     image_paths = []
     labels = []
     class_to_idx = {
-        'Recyclable': 0,
-        'Electronic': 1,
-        'Organic': 2
+        '0_Recycleable': 0,
+        '1_Electronic': 1,
+        '2_Organic': 2
     }
     
     train_dir = os.path.join(data_dir, 'train')
@@ -226,3 +226,39 @@ def create_test_dataloader(test_paths, batch_size=32, num_workers=4):
     )
     
     return test_loader
+
+
+def save_preprocessing_data(train_paths, train_labels, val_paths, val_labels, 
+                            test_paths, class_to_idx, output_dir='output'):
+    """Save preprocessing outputs to files"""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    preprocessing_data = {
+        'train_paths': train_paths,
+        'train_labels': train_labels,
+        'val_paths': val_paths,
+        'val_labels': val_labels,
+        'test_paths': test_paths,
+        'class_to_idx': class_to_idx
+    }
+    
+    output_path = os.path.join(output_dir, 'preprocessing_data.pkl')
+    with open(output_path, 'wb') as f:
+        pickle.dump(preprocessing_data, f)
+    
+    print(f"Preprocessing data saved to {output_path}")
+    return output_path
+
+
+def load_preprocessing_data(output_dir='output'):
+    """Load preprocessing outputs from files"""
+    input_path = os.path.join(output_dir, 'preprocessing_data.pkl')
+    
+    with open(input_path, 'rb') as f:
+        preprocessing_data = pickle.load(f)
+    
+    print(f"Preprocessing data loaded from {input_path}")
+    
+    return (preprocessing_data['train_paths'], preprocessing_data['train_labels'],
+            preprocessing_data['val_paths'], preprocessing_data['val_labels'],
+            preprocessing_data['test_paths'], preprocessing_data['class_to_idx'])

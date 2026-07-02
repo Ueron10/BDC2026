@@ -8,6 +8,8 @@ from sklearn.metrics import (
     f1_score, confusion_matrix, classification_report
 )
 from tqdm import tqdm
+import pickle
+import os
 
 
 def evaluate_model(model, data_loader, device):
@@ -156,3 +158,26 @@ def plot_training_history(history, save_path=None):
         plt.show()
     
     plt.close()
+
+
+def save_evaluation_metrics(metrics, output_dir='output'):
+    """Save evaluation metrics to file"""
+    os.makedirs(output_dir, exist_ok=True)
+    
+    output_path = os.path.join(output_dir, 'evaluation_metrics.pkl')
+    with open(output_path, 'wb') as f:
+        pickle.dump(metrics, f)
+    
+    print(f"Evaluation metrics saved to {output_path}")
+    return output_path
+
+
+def load_evaluation_metrics(output_dir='output'):
+    """Load evaluation metrics from file"""
+    input_path = os.path.join(output_dir, 'evaluation_metrics.pkl')
+    
+    with open(input_path, 'rb') as f:
+        metrics = pickle.load(f)
+    
+    print(f"Evaluation metrics loaded from {input_path}")
+    return metrics

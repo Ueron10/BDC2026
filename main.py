@@ -10,11 +10,12 @@ from config import Config
 from utils import set_seed, get_device, setup_paths, print_paths, count_parameters
 from preprocessing import (
     load_train_data, load_test_data, split_train_val,
-    create_dataloaders, create_test_dataloader, get_tta_transforms
+    create_dataloaders, create_test_dataloader, get_tta_transforms,
+    save_preprocessing_data, load_preprocessing_data
 )
-from model import WasteClassifier, Trainer, load_model
-from evaluate import evaluate_model, print_evaluation_report, plot_confusion_matrix, plot_training_history
-from predict import predict, generate_submission, analyze_test_predictions
+from model import WasteClassifier, Trainer, load_model, save_training_history, load_training_history
+from evaluate import evaluate_model, print_evaluation_report, plot_confusion_matrix, plot_training_history, save_evaluation_metrics, load_evaluation_metrics
+from predict import predict, predict_with_tta, generate_submission, analyze_test_predictions
 
 
 def main(args):
@@ -38,15 +39,23 @@ def main(args):
     print("\n" + "="*60)
     print("STEP 1: LOADING DATA")
     print("="*60)
-    train_paths, train_labels, class_to_idx = load_train_data(paths['data_dir'])
     
-    test_paths = load_test_data(paths['data_dir'])
-    
-    train_paths, val_paths, train_labels, val_labels = split_train_val(
-        train_paths, train_labels, 
-        val_split=args.val_split, 
-        random_state=args.seed
-    )
+    if args.load_preprocessing:
+        print("Loading preprocessing data from file...")
+        train_paths, train_labels, val_paths, val_labels, test_paths, class_to_idx = load_preprocessing_data(paths['output_dir'])
+    else:
+        train_paths, train_labels, class_to_idx = load_train_data(paths['data_dir'])
+        
+        test_paths = load_test_data(paths['data_dir'])
+        
+        train_paths, val_paths, train_labels, val_labels = split_train_val(
+            train_paths, train_labels, 
+            val_split=args.val_split, 
+            random_state=args.seed
+        )
+        
+        save_preprocessing_data(train_paths, train_labels, val_paths, val_labels, 
+                                test_paths, class_to_idx, paths['output_dir'])
     
     print("\n" + "="*60)
     print("STEP 2: CREATING DATALOADERS")
@@ -70,14 +79,12 @@ def main(args):
     print("="*60)
     model = WasteClassifier(
         num_classes=Config.NUM_CLASSES,
-        backbone=args.backbone,
         pretrained=args.pretrained
     )
     
-    print(f"Model architecture: {args.backbone}")
+    print(f"Model architecture: efficientnet_b0")
     print(f"Number of parameters: {count_parameters(model):,}")
     
-    from config import Config
     trainer = Trainer(
         model=model,
         train_loader=train_loader,
@@ -89,41 +96,65 @@ def main(args):
         use_mixup=Config.USE_MIXUP,
         mixup_alpha=Config.MIXUP_ALPHA,
         warmup_epochs=Config.WARMUP_EPOCHS,
-        min_lr=Config.MIN_LR
+        min_lr=Config.MIN_LR,
+        early_stopping_patience=Config.EARLY_STOPPING_PATIENCE
     )
     
-    history = trainer.train(
-        num_epochs=args.epochs,
-        save_dir=paths['model_dir']
-    )
+    if args.load_training:
+        print("Loading training history from file...")
+        history = load_training_history(paths['output_dir'])
+        plot_training_history(
+            history,
+            save_path=os.path.join(paths['docs_dir'], 'training_history.png')
+        )
+    else:
+        history = trainer.train(
+            num_epochs=args.epochs,
+            save_dir=paths['model_dir']
+        )
+        
+        save_training_history(history, paths['output_dir'])
+        
+        plot_training_history(
+            history,
+            save_path=os.path.join(paths['docs_dir'], 'training_history.png')
+        )
     
-    plot_training_history(
-        history,
-        save_path=os.path.join(paths['docs_dir'], 'training_history.png')
-    )
+    best_model_path = os.path.join(paths['model_dir'], 'best_model.pth')
+    model, checkpoint = load_model(best_model_path, num_classes=Config.NUM_CLASSES, device=device)
     
     print("\n" + "="*60)
     print("STEP 4: EVALUATING MODEL")
     print("="*60)
-    best_model_path = os.path.join(paths['model_dir'], 'best_model.pth')
-    model, checkpoint = load_model(best_model_path, num_classes=Config.NUM_CLASSES, device=device)
     
-    metrics = evaluate_model(model, val_loader, device)
-    
-    print_evaluation_report(metrics, class_names)
-    
-    plot_confusion_matrix(
-        metrics,
-        class_names=class_names,
-        save_path=os.path.join(paths['docs_dir'], 'confusion_matrix.png')
-    )
+    if args.load_evaluation:
+        print("Loading evaluation metrics from file...")
+        metrics = load_evaluation_metrics(paths['output_dir'])
+        print_evaluation_report(metrics, class_names)
+        
+        plot_confusion_matrix(
+            metrics,
+            class_names=class_names,
+            save_path=os.path.join(paths['docs_dir'], 'confusion_matrix.png')
+        )
+    else:
+        metrics = evaluate_model(model, val_loader, device)
+        
+        save_evaluation_metrics(metrics, paths['output_dir'])
+        
+        print_evaluation_report(metrics, class_names)
+        
+        plot_confusion_matrix(
+            metrics,
+            class_names=class_names,
+            save_path=os.path.join(paths['docs_dir'], 'confusion_matrix.png')
+        )
     
     print("\n" + "="*60)
     print("STEP 5: PREDICTING ON TEST SET")
     print("="*60)
     
     if Config.USE_TTA:
-        from predict import predict_with_tta
         tta_transforms = get_tta_transforms()
         predictions, image_paths, probabilities = predict_with_tta(
             model, test_loader, device, tta_transforms
@@ -170,9 +201,6 @@ if __name__ == '__main__':
     parser.add_argument('--docs_dir', type=str, default=Config.DOCS_DIR,
                         help='Directory to save documentation and plots (relative or absolute)')
     
-    parser.add_argument('--backbone', type=str, default=Config.BACKBONE,
-                        choices=Config.AVAILABLE_BACKBONES,
-                        help='Pre-trained backbone model')
     parser.add_argument('--pretrained', action='store_true', default=Config.PRETRAINED,
                         help='Use pre-trained weights')
     
@@ -191,6 +219,15 @@ if __name__ == '__main__':
     
     parser.add_argument('--seed', type=int, default=Config.SEED,
                         help='Random seed for reproducibility')
+    
+    parser.add_argument('--load_preprocessing', action='store_true',
+                        help='Load preprocessing data from file instead of processing from scratch')
+    
+    parser.add_argument('--load_training', action='store_true',
+                        help='Load training history from file instead of training from scratch')
+    
+    parser.add_argument('--load_evaluation', action='store_true',
+                        help='Load evaluation metrics from file instead of evaluating from scratch')
     
     args = parser.parse_args()
     
